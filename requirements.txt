@@ -1,0 +1,24 @@
+# Multi-Agent Customer Support System - Dependencies
+# Python 3.8+
+
+# Core dependencies - no external LLM or LangGraph required for this implementation
+# This is a standalone implementation using state-based coordination
+
+# Database
+sqlite3  # Built-in with Python, no installation needed
+
+# Standard library dependencies (no installation needed)
+# - dataclasses (Python 3.7+)
+# - typing (Python 3.5+)
+# - json
+# - datetime
+# - pathlib
+# - re
+
+# Optional: For enhanced functionality
+pytest>=7.4.0           # For running tests
+pytest-cov>=4.1.0       # For test coverage
+
+# Note: This implementation uses a custom A2A coordination system
+# based on state management patterns, not requiring LangGraph or LLM APIs.
+# This makes it lightweight, fast, and suitable for educational purposes.
