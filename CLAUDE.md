@@ -1013,6 +1013,1063 @@ This multi-agent system demonstrates clean architectural patterns for agent coor
 
 ---
 
+## Advanced Topics
+
+### Multi-Turn Conversations
+
+**Current State**: System processes single queries in isolation.
+
+**To Add Conversation Context:**
+
+```python
+# Extend AgentState with conversation history
+@dataclass
+class AgentState:
+    # ... existing fields ...
+    conversation_history: List[Dict[str, str]] = field(default_factory=list)
+    session_id: Optional[str] = None
+```
+
+**Implementation Pattern:**
+1. Store conversation history in session storage (file, Redis, database)
+2. Pass previous context to router for better intent detection
+3. Support follow-up queries like "and what about tickets?"
+4. Implement conversation memory management (limit to last N turns)
+
+### Parallel Agent Execution
+
+**Current**: Sequential execution for all multi-agent scenarios
+**Enhancement**: Execute independent agents in parallel
+
+```python
+import asyncio
+from concurrent.futures import ThreadPoolExecutor
+
+async def _execute_parallel(self, state: AgentState) -> AgentState:
+    """Execute multiple agents in parallel."""
+    state.log("  Execution mode: PARALLEL")
+
+    with ThreadPoolExecutor(max_workers=3) as executor:
+        futures = []
+        for agent_name in state.required_agents:
+            action = self._determine_action_for_agent(agent_name, state)
+            params = self._build_params(state, action)
+            future = executor.submit(
+                self._call_agent, agent_name, action, params, state
+            )
+            futures.append((agent_name, future))
+
+        for agent_name, future in futures:
+            result = future.result()
+            state.agent_results.append(result)
+
+    return state
+```
+
+**Use Cases:**
+- Fetching customer data and ticket statistics simultaneously
+- Running multiple independent queries
+- Gathering data from multiple sources
+
+### Agent Self-Correction
+
+**Pattern**: Agents can validate their own outputs and retry
+
+```python
+def process_request(self, request: Dict[str, Any]) -> Dict[str, Any]:
+    """Process request with self-correction."""
+    max_retries = 3
+
+    for attempt in range(max_retries):
+        result = self._execute_action(request)
+
+        # Validate result
+        if self._validate_result(result):
+            return result
+
+        # Log retry
+        print(f"[{self.agent_name}] Retry {attempt + 1}/{max_retries}")
+
+        # Adjust parameters for retry
+        request = self._adjust_for_retry(request, result)
+
+    return {"success": False, "error": "Max retries exceeded"}
+```
+
+### Dynamic Agent Loading
+
+**Pattern**: Load agents dynamically based on available modules
+
+```python
+import importlib
+from pathlib import Path
+
+def _load_agents_dynamically(self):
+    """Dynamically load all agent modules."""
+    agents_dir = Path("agents")
+    self.agents = {}
+
+    for agent_file in agents_dir.glob("*_agent.py"):
+        module_name = agent_file.stem
+        module = importlib.import_module(f"agents.{module_name}")
+
+        # Get the agent class (assume class name matches file)
+        class_name = ''.join(word.capitalize() for word in module_name.split('_'))
+        agent_class = getattr(module, class_name)
+
+        # Instantiate
+        self.agents[class_name] = agent_class(self.db_path)
+```
+
+### Conditional Routing
+
+**Advanced routing based on runtime conditions:**
+
+```python
+def _dynamic_routing(self, state: AgentState) -> AgentState:
+    """Route based on runtime conditions."""
+
+    # Check customer status first
+    if state.customer_id:
+        customer_result = self.data_agent.process_request({
+            "action": "get_customer",
+            "params": {"customer_id": state.customer_id}
+        })
+
+        if customer_result.get("success"):
+            customer = customer_result["customer"]
+
+            # VIP customers get priority routing
+            if customer.get("status") == "vip":
+                state.priority = "high"
+                state.required_agents = ["VIPSupportAgent"]
+            # Disabled customers get different flow
+            elif customer.get("status") == "disabled":
+                state.required_agents = ["AccountRecoveryAgent"]
+
+    return state
+```
+
+### Agent Composition Patterns
+
+**Decorator Pattern for Agents:**
+
+```python
+class LoggingAgentDecorator:
+    """Adds detailed logging to any agent."""
+
+    def __init__(self, agent):
+        self.agent = agent
+        self.agent_name = f"{agent.agent_name}_Logged"
+
+    def process_request(self, request: Dict[str, Any]) -> Dict[str, Any]:
+        start_time = datetime.now()
+
+        print(f"[{self.agent_name}] Starting: {request['action']}")
+        result = self.agent.process_request(request)
+
+        duration = (datetime.now() - start_time).total_seconds()
+        print(f"[{self.agent_name}] Completed in {duration:.2f}s")
+
+        return result
+
+# Usage
+self.data_agent = LoggingAgentDecorator(CustomerDataAgent(db_path))
+```
+
+---
+
+## Troubleshooting Guide
+
+### Common Issues and Solutions
+
+#### Issue 1: "Customer with ID X not found"
+
+**Cause**: Customer ID doesn't exist in database or wrong ID extracted
+
+**Debug Steps:**
+1. Check database: `sqlite3 support.db "SELECT * FROM customers WHERE id = X;"`
+2. Verify customer ID extraction in router
+3. Check if customer was deleted
+
+**Solution:**
+```python
+# Add customer existence check before operations
+def _validate_customer_exists(self, customer_id: int) -> bool:
+    result = self.mcp.get_customer(customer_id)
+    return result.get("success", False)
+```
+
+#### Issue 2: Agent Not Called in Sequence
+
+**Cause**: Intent detection didn't add agent to required_agents list
+
+**Debug Steps:**
+1. Check coordination log for intent analysis phase
+2. Verify query keywords match intent detection patterns
+3. Check if coordination_type is correct
+
+**Solution:**
+```python
+# In router_agent.py, add debug logging
+print(f"Query keywords: {query_lower.split()}")
+print(f"Detected intents: {intents}")
+print(f"Required agents: {required_agents}")
+```
+
+#### Issue 3: State Data Lost Between Agents
+
+**Cause**: State not properly updated or passed
+
+**Debug Steps:**
+1. Check `_execute_sequential` method
+2. Verify agent results are added to `state.agent_results`
+3. Check state logging for data flow
+
+**Solution:**
+```python
+# Always update state with agent-specific data
+if agent_name == "CustomerDataAgent":
+    state.customer_data = result  # Store for next agent
+    print(f"Stored customer_data: {result.keys()}")
+```
+
+#### Issue 4: Database Locked Error
+
+**Cause**: Multiple threads accessing SQLite simultaneously
+
+**Solution:**
+```python
+# Ensure connection uses check_same_thread=False
+self.conn = sqlite3.connect(
+    self.db_path,
+    check_same_thread=False,
+    timeout=10.0  # Add timeout
+)
+```
+
+#### Issue 5: Coordination Type Always "Simple"
+
+**Cause**: Intent detection logic doesn't trigger multi-agent patterns
+
+**Debug Steps:**
+1. Check query keywords
+2. Review coordination_type assignment logic
+3. Test with known multi-agent queries
+
+**Solution:**
+```python
+# Add explicit multi-agent triggers
+if len(required_agents) > 1:
+    coordination_type = "sequential"
+
+# Or for complex queries
+if "complex_query" in intents or len(required_agents) >= 2:
+    coordination_type = "negotiation"
+```
+
+#### Issue 6: MCP Tools Return Empty Results
+
+**Cause**: Database queries returning no rows
+
+**Debug Steps:**
+1. Run SQL directly: `sqlite3 support.db "SELECT * FROM customers;"`
+2. Check if sample data was inserted
+3. Verify table names and column names
+
+**Solution:**
+```bash
+# Reset database
+rm support.db
+python database_setup.py
+# Select 'y' to insert sample data
+```
+
+#### Issue 7: Import Errors
+
+**Cause**: Python path issues or missing __init__.py files
+
+**Solution:**
+```bash
+# Ensure you're in the project root
+cd /home/user/a2a_new
+
+# Check __init__.py files exist
+ls agents/__init__.py
+ls mcp_server/__init__.py
+
+# Run from project root
+python main.py
+```
+
+#### Issue 8: Logs Not Showing
+
+**Cause**: Logging configuration or output buffering
+
+**Solution:**
+```python
+# Force flush after logging
+import sys
+print(f"[{self.agent_name}] Message", flush=True)
+
+# Or disable buffering
+sys.stdout.flush()
+```
+
+---
+
+## Detailed Code Examples
+
+### Example 1: Complete Custom Agent Implementation
+
+```python
+# agents/billing_agent.py
+from typing import Dict, Any, Optional
+from mcp_server.mcp_tools import get_mcp_tools
+
+class BillingAgent:
+    """Specialized agent for billing operations."""
+
+    def __init__(self, db_path: str = "support.db"):
+        self.mcp = get_mcp_tools(db_path)
+        self.agent_name = "BillingAgent"
+        self.billing_rules = self._load_billing_rules()
+
+    def _load_billing_rules(self) -> Dict[str, Any]:
+        """Load billing rules and policies."""
+        return {
+            "refund_window_days": 30,
+            "auto_refund_threshold": 100.00,
+            "requires_approval": ["subscription", "annual"]
+        }
+
+    def process_request(self, request: Dict[str, Any]) -> Dict[str, Any]:
+        """Process billing requests."""
+        action = request.get("action")
+        params = request.get("params", {})
+
+        print(f"[{self.agent_name}] Processing: {action}")
+
+        # Route to handler
+        handlers = {
+            "process_refund": self._process_refund,
+            "calculate_charges": self._calculate_charges,
+            "validate_payment": self._validate_payment,
+            "check_subscription": self._check_subscription
+        }
+
+        handler = handlers.get(action, self._unknown_action)
+        result = handler(params)
+        result["agent"] = self.agent_name
+        return result
+
+    def _process_refund(self, params: Dict[str, Any]) -> Dict[str, Any]:
+        """Process a refund request."""
+        customer_id = params.get("customer_id")
+        amount = params.get("amount", 0.0)
+        reason = params.get("reason", "Customer request")
+
+        # Validate customer
+        customer = self.mcp.get_customer(customer_id)
+        if not customer["success"]:
+            return {"success": False, "error": "Customer not found"}
+
+        # Check refund eligibility
+        if amount > self.billing_rules["auto_refund_threshold"]:
+            # Create ticket for manual review
+            ticket_result = self.mcp.create_ticket(
+                customer_id,
+                f"Refund request: ${amount:.2f} - {reason}",
+                "high"
+            )
+            return {
+                "success": True,
+                "requires_approval": True,
+                "ticket_id": ticket_result["ticket"]["id"],
+                "message": "Refund requires approval - ticket created"
+            }
+        else:
+            # Auto-approve small refunds
+            return {
+                "success": True,
+                "approved": True,
+                "amount": amount,
+                "message": f"Refund of ${amount:.2f} approved automatically"
+            }
+
+    def _calculate_charges(self, params: Dict[str, Any]) -> Dict[str, Any]:
+        """Calculate billing charges."""
+        customer_id = params.get("customer_id")
+        plan_type = params.get("plan_type", "basic")
+
+        rates = {
+            "basic": 9.99,
+            "pro": 29.99,
+            "enterprise": 99.99
+        }
+
+        return {
+            "success": True,
+            "plan_type": plan_type,
+            "monthly_charge": rates.get(plan_type, 0.0),
+            "annual_charge": rates.get(plan_type, 0.0) * 12 * 0.9  # 10% discount
+        }
+
+    def _validate_payment(self, params: Dict[str, Any]) -> Dict[str, Any]:
+        """Validate payment information."""
+        # Placeholder - would integrate with payment gateway
+        return {
+            "success": True,
+            "valid": True,
+            "message": "Payment method validated"
+        }
+
+    def _check_subscription(self, params: Dict[str, Any]) -> Dict[str, Any]:
+        """Check subscription status."""
+        customer_id = params.get("customer_id")
+
+        # Get customer
+        customer = self.mcp.get_customer(customer_id)
+        if not customer["success"]:
+            return {"success": False, "error": "Customer not found"}
+
+        # Placeholder - would check actual subscription data
+        return {
+            "success": True,
+            "active": customer["customer"]["status"] == "active",
+            "plan": "pro",
+            "renewal_date": "2025-01-23"
+        }
+
+    def _unknown_action(self, params: Dict[str, Any]) -> Dict[str, Any]:
+        """Handle unknown actions."""
+        return {
+            "success": False,
+            "error": "Unknown billing action"
+        }
+```
+
+### Example 2: Complex Query Handler
+
+```python
+# In router_agent.py - add complex query handler
+def handle_complex_query(self, query: str) -> Dict[str, Any]:
+    """Handle queries requiring multiple data points."""
+
+    query_lower = query.lower()
+
+    # Pattern: "show customers with X tickets and Y status"
+    if "customers with" in query_lower and "tickets" in query_lower:
+        # Extract conditions
+        ticket_count = self._extract_number(query)
+        status = "active" if "active" in query_lower else None
+        priority = None
+
+        if "high priority" in query_lower:
+            priority = "high"
+        elif "open" in query_lower:
+            status_filter = "open"
+
+        return {
+            "query_type": "filtered_customers_with_tickets",
+            "filters": {
+                "min_tickets": ticket_count,
+                "customer_status": status,
+                "ticket_priority": priority
+            }
+        }
+
+    # Pattern: "what's the status of customer X's tickets"
+    elif "status" in query_lower and "tickets" in query_lower:
+        customer_id = self._extract_customer_id(query)
+        return {
+            "query_type": "customer_ticket_status",
+            "customer_id": customer_id
+        }
+
+    return {"query_type": "unknown"}
+```
+
+### Example 3: Agent State Persistence
+
+```python
+# Save and restore agent state
+import json
+from pathlib import Path
+
+class StatePersistence:
+    """Handle state persistence for multi-turn conversations."""
+
+    def __init__(self, storage_dir: str = "state_storage"):
+        self.storage_dir = Path(storage_dir)
+        self.storage_dir.mkdir(exist_ok=True)
+
+    def save_state(self, session_id: str, state: AgentState) -> bool:
+        """Save agent state to disk."""
+        try:
+            file_path = self.storage_dir / f"{session_id}.json"
+            state_dict = {
+                "query": state.query,
+                "customer_id": state.customer_id,
+                "intents": state.intents,
+                "priority": state.priority,
+                "coordination_type": state.coordination_type,
+                "agent_results": state.agent_results,
+                "final_response": state.final_response,
+                "timestamp": datetime.now().isoformat()
+            }
+
+            with open(file_path, 'w') as f:
+                json.dump(state_dict, f, indent=2)
+
+            return True
+        except Exception as e:
+            print(f"Error saving state: {e}")
+            return False
+
+    def load_state(self, session_id: str) -> Optional[Dict[str, Any]]:
+        """Load agent state from disk."""
+        try:
+            file_path = self.storage_dir / f"{session_id}.json"
+            if not file_path.exists():
+                return None
+
+            with open(file_path, 'r') as f:
+                return json.load(f)
+        except Exception as e:
+            print(f"Error loading state: {e}")
+            return None
+
+    def cleanup_old_states(self, max_age_hours: int = 24):
+        """Remove state files older than max_age_hours."""
+        cutoff = datetime.now() - timedelta(hours=max_age_hours)
+
+        for file_path in self.storage_dir.glob("*.json"):
+            try:
+                with open(file_path, 'r') as f:
+                    state = json.load(f)
+                    timestamp = datetime.fromisoformat(state["timestamp"])
+
+                    if timestamp < cutoff:
+                        file_path.unlink()
+                        print(f"Cleaned up old state: {file_path.name}")
+            except Exception as e:
+                print(f"Error cleaning up {file_path}: {e}")
+```
+
+### Example 4: Advanced Response Formatting
+
+```python
+# In router_agent.py - add rich response formatting
+def _format_rich_response(self, result: Dict[str, Any]) -> str:
+    """Format response with rich text elements."""
+
+    if "customers" in result:
+        customers = result["customers"]
+
+        # Create table-like output
+        response = "┌" + "─" * 78 + "┐\n"
+        response += "│" + " CUSTOMER LIST".center(78) + "│\n"
+        response += "├" + "─" * 78 + "┤\n"
+
+        for customer in customers[:10]:
+            name = customer['name'][:25].ljust(25)
+            email = customer['email'][:30].ljust(30)
+            status = customer['status'].upper().center(10)
+
+            response += f"│ {name} │ {email} │ {status} │\n"
+
+        response += "└" + "─" * 78 + "┘\n"
+
+        if len(customers) > 10:
+            response += f"\n... and {len(customers) - 10} more customers\n"
+
+        return response
+
+    return self._format_data_response(result)
+```
+
+---
+
+## Performance Optimization
+
+### Database Optimization
+
+**1. Connection Pooling:**
+```python
+from queue import Queue
+import threading
+
+class ConnectionPool:
+    """Simple connection pool for SQLite."""
+
+    def __init__(self, db_path: str, pool_size: int = 5):
+        self.db_path = db_path
+        self.pool = Queue(maxsize=pool_size)
+        self.lock = threading.Lock()
+
+        # Initialize pool
+        for _ in range(pool_size):
+            conn = sqlite3.connect(db_path, check_same_thread=False)
+            conn.row_factory = sqlite3.Row
+            self.pool.put(conn)
+
+    def get_connection(self):
+        """Get connection from pool."""
+        return self.pool.get()
+
+    def return_connection(self, conn):
+        """Return connection to pool."""
+        self.pool.put(conn)
+```
+
+**2. Query Optimization:**
+```python
+# Use prepared statements
+self.get_customer_stmt = self.conn.prepare(
+    "SELECT * FROM customers WHERE id = ?"
+)
+
+# Add covering indexes
+self.cursor.execute("""
+    CREATE INDEX IF NOT EXISTS idx_tickets_customer_status
+    ON tickets(customer_id, status, priority)
+""")
+
+# Use query hints
+self.cursor.execute("""
+    SELECT * FROM customers
+    INDEXED BY idx_customers_email
+    WHERE email = ?
+""")
+```
+
+**3. Batch Operations:**
+```python
+def batch_update_customers(self, updates: List[Dict[str, Any]]) -> Dict[str, Any]:
+    """Update multiple customers in one transaction."""
+    try:
+        self.conn.execute("BEGIN TRANSACTION")
+
+        for update in updates:
+            customer_id = update["customer_id"]
+            data = update["data"]
+            self.update_customer(customer_id, data)
+
+        self.conn.commit()
+        return {"success": True, "updated_count": len(updates)}
+    except Exception as e:
+        self.conn.rollback()
+        return {"success": False, "error": str(e)}
+```
+
+### Agent Performance
+
+**1. Caching:**
+```python
+from functools import lru_cache
+from datetime import datetime, timedelta
+
+class CachedMCPTools(MCPTools):
+    """MCP Tools with caching."""
+
+    def __init__(self, db_path: str):
+        super().__init__(db_path)
+        self.cache = {}
+        self.cache_ttl = timedelta(minutes=5)
+
+    def get_customer(self, customer_id: int) -> Dict[str, Any]:
+        """Get customer with caching."""
+        cache_key = f"customer_{customer_id}"
+
+        # Check cache
+        if cache_key in self.cache:
+            cached_data, timestamp = self.cache[cache_key]
+            if datetime.now() - timestamp < self.cache_ttl:
+                return cached_data
+
+        # Fetch from database
+        result = super().get_customer(customer_id)
+
+        # Cache result
+        if result["success"]:
+            self.cache[cache_key] = (result, datetime.now())
+
+        return result
+
+    def invalidate_cache(self, customer_id: int):
+        """Invalidate cache for customer."""
+        cache_key = f"customer_{customer_id}"
+        self.cache.pop(cache_key, None)
+```
+
+**2. Lazy Loading:**
+```python
+class LazyAgent:
+    """Agent that loads resources on-demand."""
+
+    def __init__(self, db_path: str):
+        self.db_path = db_path
+        self._mcp = None
+        self._rules = None
+
+    @property
+    def mcp(self):
+        """Lazy-load MCP tools."""
+        if self._mcp is None:
+            self._mcp = get_mcp_tools(self.db_path)
+        return self._mcp
+
+    @property
+    def rules(self):
+        """Lazy-load business rules."""
+        if self._rules is None:
+            self._rules = self._load_rules()
+        return self._rules
+```
+
+### Coordination Optimization
+
+**1. Early Exit:**
+```python
+def _execute_with_early_exit(self, state: AgentState) -> AgentState:
+    """Execute agents with early exit on critical errors."""
+
+    for agent_name in state.agent_sequence:
+        result = self._call_agent(agent_name, action, params, state)
+        state.agent_results.append(result)
+
+        # Early exit on critical errors
+        if not result.get("success") and result.get("critical", False):
+            state.log(f"  Critical error in {agent_name}, stopping execution")
+            state.phase = "error"
+            return state
+
+        # Early exit if we have enough information
+        if self._has_sufficient_data(state):
+            state.log("  Sufficient data collected, skipping remaining agents")
+            break
+
+    return state
+```
+
+**2. Result Streaming:**
+```python
+def process_query_streaming(self, query: str) -> Generator[str, None, None]:
+    """Stream results as they become available."""
+    state = AgentState(query=query)
+
+    yield "Starting analysis...\n"
+    state = self._analyze_phase(state)
+    yield f"Detected intents: {', '.join(state.intents)}\n"
+
+    yield "Routing request...\n"
+    state = self._route_phase(state)
+    yield f"Agents: {' → '.join(state.agent_sequence)}\n"
+
+    for agent_name in state.agent_sequence:
+        yield f"Calling {agent_name}...\n"
+        result = self._call_agent(agent_name, action, params, state)
+        yield f"{agent_name} completed\n"
+
+    yield "Synthesizing response...\n"
+    state = self._synthesize_phase(state)
+    yield f"\n{state.final_response}\n"
+```
+
+---
+
+## Security Considerations
+
+### Input Validation
+
+**1. Query Sanitization:**
+```python
+def sanitize_query(self, query: str) -> str:
+    """Sanitize user input."""
+    # Remove control characters
+    sanitized = ''.join(char for char in query if char.isprintable())
+
+    # Limit length
+    max_length = 1000
+    if len(sanitized) > max_length:
+        sanitized = sanitized[:max_length]
+
+    # Remove SQL injection attempts
+    dangerous_patterns = [
+        "DROP TABLE", "DELETE FROM", "INSERT INTO",
+        "UPDATE ", "--", "/*", "*/"
+    ]
+
+    query_upper = sanitized.upper()
+    for pattern in dangerous_patterns:
+        if pattern in query_upper:
+            raise ValueError(f"Potentially dangerous input detected: {pattern}")
+
+    return sanitized
+```
+
+**2. Parameter Validation:**
+```python
+def validate_customer_id(self, customer_id: Any) -> int:
+    """Validate customer ID parameter."""
+    try:
+        cid = int(customer_id)
+        if cid <= 0:
+            raise ValueError("Customer ID must be positive")
+        if cid > 1000000:  # Reasonable upper bound
+            raise ValueError("Customer ID out of range")
+        return cid
+    except (TypeError, ValueError) as e:
+        raise ValueError(f"Invalid customer ID: {e}")
+```
+
+**3. SQL Injection Prevention:**
+```python
+# ALWAYS use parameterized queries
+def get_customer_safe(self, customer_id: int) -> Dict[str, Any]:
+    """Safe customer retrieval."""
+    # GOOD - parameterized
+    self.cursor.execute(
+        "SELECT * FROM customers WHERE id = ?",
+        (customer_id,)
+    )
+
+    # NEVER do this:
+    # BAD - string interpolation
+    # self.cursor.execute(f"SELECT * FROM customers WHERE id = {customer_id}")
+```
+
+### Access Control
+
+**1. Role-Based Access:**
+```python
+class SecureAgent:
+    """Agent with role-based access control."""
+
+    def __init__(self, db_path: str):
+        self.mcp = get_mcp_tools(db_path)
+        self.agent_name = "SecureAgent"
+        self.permissions = self._load_permissions()
+
+    def _load_permissions(self) -> Dict[str, List[str]]:
+        """Load role permissions."""
+        return {
+            "read_only": ["get_customer", "list_customers"],
+            "support": ["get_customer", "list_customers", "create_ticket"],
+            "admin": ["*"]  # All actions
+        }
+
+    def process_request(self, request: Dict[str, Any]) -> Dict[str, Any]:
+        """Process with access control."""
+        action = request.get("action")
+        role = request.get("role", "read_only")
+
+        # Check permissions
+        if not self._has_permission(role, action):
+            return {
+                "success": False,
+                "error": f"Permission denied: {role} cannot perform {action}"
+            }
+
+        # Process request
+        return self._execute_action(action, request.get("params", {}))
+
+    def _has_permission(self, role: str, action: str) -> bool:
+        """Check if role has permission for action."""
+        allowed = self.permissions.get(role, [])
+        return "*" in allowed or action in allowed
+```
+
+**2. Rate Limiting:**
+```python
+from collections import defaultdict
+from time import time
+
+class RateLimiter:
+    """Simple rate limiter for agent requests."""
+
+    def __init__(self, max_requests: int = 100, window_seconds: int = 60):
+        self.max_requests = max_requests
+        self.window_seconds = window_seconds
+        self.requests = defaultdict(list)
+
+    def allow_request(self, identifier: str) -> bool:
+        """Check if request is allowed."""
+        now = time()
+        cutoff = now - self.window_seconds
+
+        # Remove old requests
+        self.requests[identifier] = [
+            req_time for req_time in self.requests[identifier]
+            if req_time > cutoff
+        ]
+
+        # Check limit
+        if len(self.requests[identifier]) >= self.max_requests:
+            return False
+
+        # Record request
+        self.requests[identifier].append(now)
+        return True
+```
+
+### Data Privacy
+
+**1. PII Redaction:**
+```python
+import re
+
+def redact_pii(self, text: str) -> str:
+    """Redact personally identifiable information."""
+    # Redact email addresses
+    text = re.sub(
+        r'\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Z|a-z]{2,}\b',
+        '[EMAIL REDACTED]',
+        text
+    )
+
+    # Redact phone numbers
+    text = re.sub(
+        r'\+?\d{1,3}[-.]?\(?\d{3}\)?[-.]?\d{3}[-.]?\d{4}',
+        '[PHONE REDACTED]',
+        text
+    )
+
+    # Redact credit card numbers
+    text = re.sub(
+        r'\b\d{4}[-\s]?\d{4}[-\s]?\d{4}[-\s]?\d{4}\b',
+        '[CARD REDACTED]',
+        text
+    )
+
+    return text
+```
+
+**2. Audit Logging:**
+```python
+class AuditLogger:
+    """Log all agent actions for security audits."""
+
+    def __init__(self, log_file: str = "audit.log"):
+        self.log_file = log_file
+
+    def log_action(self, agent: str, action: str, user: str, result: str):
+        """Log an agent action."""
+        timestamp = datetime.now().isoformat()
+        log_entry = {
+            "timestamp": timestamp,
+            "agent": agent,
+            "action": action,
+            "user": user,
+            "result": result
+        }
+
+        with open(self.log_file, 'a') as f:
+            f.write(json.dumps(log_entry) + '\n')
+```
+
+---
+
+## FAQ (Frequently Asked Questions)
+
+### General Questions
+
+**Q: Can I use this with an actual LLM like GPT-4 or Claude?**
+
+A: Yes! The architecture is designed to support LLM integration. Replace the rule-based intent detection in `router_agent.py` with LLM calls. The state-based coordination and MCP layer will work the same way.
+
+**Q: How do I add more coordination patterns?**
+
+A: 1) Define the pattern logic in `router_agent.py:analyze_intent()`
+   2) Add execution method in `a2a_system.py:_execute_phase()`
+   3) Follow existing patterns (simple/sequential/negotiation) as templates
+
+**Q: Can agents call each other directly?**
+
+A: No, and this is intentional. All coordination goes through the A2ACoordinationSystem. This centralized approach makes the system easier to debug and reason about.
+
+**Q: How do I persist conversation state?**
+
+A: Implement a state storage layer (see "Advanced Topics" section). Store state in Redis, database, or files keyed by session ID.
+
+### Technical Questions
+
+**Q: Why SQLite instead of PostgreSQL/MySQL?**
+
+A: Educational simplicity. SQLite requires no setup. For production, swap out the MCPTools connection to use any database - the agent code won't change.
+
+**Q: Can I run agents in parallel?**
+
+A: Yes, see "Advanced Topics > Parallel Agent Execution". Use ThreadPoolExecutor or asyncio for independent agents.
+
+**Q: How do I handle agent failures?**
+
+A: Agents return `{"success": False, "error": "..."}` instead of raising exceptions. Check the `success` field before using results.
+
+**Q: Can I add authentication?**
+
+A: Yes, add authentication middleware before the A2A system. Pass user context in the request and check permissions in agents.
+
+**Q: How do I test new agents?**
+
+A: 1) Unit test the agent's process_request method
+   2) Add a test scenario in main.py
+   3) Run in interactive mode for manual testing
+   4) Check coordination logs for correctness
+
+### Debugging Questions
+
+**Q: How do I debug intent detection?**
+
+A: Add debug logging in `router_agent.py:analyze_intent()`. Print detected keywords, intents, and required agents.
+
+**Q: Why isn't my agent being called?**
+
+A: Check: 1) Agent is in required_agents list
+        2) Agent is registered in A2ACoordinationSystem.__init__
+        3) Agent name matches in _call_agent method
+        4) Check coordination logs
+
+**Q: How do I see all SQL queries?**
+
+A: Add logging to MCPTools:
+```python
+self.conn.set_trace_callback(print)  # Prints all SQL
+```
+
+**Q: Agent state seems wrong, how to debug?**
+
+A: 1) Enable verbose logging: `state.log()` everywhere
+   2) Export logs after run
+   3) Check state.to_dict() at each phase
+   4) Verify agent results are being stored
+
+### Architecture Questions
+
+**Q: When should I use simple vs sequential vs negotiation?**
+
+A: - **Simple**: Single data operation, no context needed
+   - **Sequential**: One agent needs output from another
+   - **Negotiation**: Multiple independent data sources combined
+
+**Q: Can I modify the state structure?**
+
+A: Yes, but carefully. Add fields to AgentState dataclass. Existing fields maintain backward compatibility.
+
+**Q: Should I create one agent or multiple?**
+
+A: Follow Single Responsibility Principle. If responsibilities are distinct (data vs support vs billing), use separate agents.
+
+**Q: How do I handle backward compatibility?**
+
+A: 1) Add new fields as Optional
+   2) Provide defaults for new parameters
+   3) Check field existence with .get()
+   4) Version your agent APIs
+
+---
+
 **Last Updated**: 2025-12-23
-**Version**: 1.0
+**Version**: 2.0
 **Maintainer**: Multi-Agent Systems Course Project
