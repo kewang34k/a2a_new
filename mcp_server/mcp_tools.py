@@ -6,7 +6,7 @@ Provides database access tools for customer and ticket management.
 import sqlite3
 from datetime import datetime
 from typing import Dict, List, Optional, Any
-import json
+from pathlib import Path
 
 
 class MCPTools:
@@ -351,11 +351,12 @@ class MCPTools:
             self.conn.close()
 
 
-# Create a singleton instance
-_mcp_instance = None
+# Cache instances per database path to avoid cross-contamination between
+# different databases (e.g., tests using temporary DB files).
+_mcp_instances: Dict[str, MCPTools] = {}
 
 def get_mcp_tools(db_path: str = "support.db") -> MCPTools:
-    """Get or create MCP tools instance.
+    """Get or create an MCP tools instance for a DB path.
 
     Args:
         db_path: Path to database
@@ -363,7 +364,26 @@ def get_mcp_tools(db_path: str = "support.db") -> MCPTools:
     Returns:
         MCPTools instance
     """
-    global _mcp_instance
-    if _mcp_instance is None:
-        _mcp_instance = MCPTools(db_path)
-    return _mcp_instance
+    key = str(Path(db_path).expanduser().resolve())
+    instance = _mcp_instances.get(key)
+    if instance is None:
+        instance = MCPTools(key)
+        _mcp_instances[key] = instance
+    return instance
+
+
+def reset_mcp_tools_cache(close_connections: bool = True) -> None:
+    """Clear cached MCPTools instances (useful for tests).
+
+    Args:
+        close_connections: If True, close any open SQLite connections first.
+    """
+    global _mcp_instances
+    if close_connections:
+        for instance in _mcp_instances.values():
+            try:
+                instance.close()
+            except Exception:
+                # Best-effort cleanup; cache clearing should still proceed.
+                pass
+    _mcp_instances = {}
