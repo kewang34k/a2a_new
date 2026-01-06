@@ -5,8 +5,7 @@ Provides database access tools for customer and ticket management.
 
 import sqlite3
 from datetime import datetime
-from typing import Dict, List, Optional, Any
-import json
+from typing import Dict, Optional, Any
 
 
 class MCPTools:
@@ -19,6 +18,8 @@ class MCPTools:
             db_path: Path to SQLite database
         """
         self.db_path = db_path
+        self.conn: Optional[sqlite3.Connection] = None
+        self.cursor: Optional[sqlite3.Cursor] = None
         self._ensure_connection()
 
     def _ensure_connection(self):
@@ -347,15 +348,16 @@ class MCPTools:
 
     def close(self):
         """Close database connection."""
-        if self.conn:
+        if self.conn is not None:
             self.conn.close()
+            self.conn = None
+            self.cursor = None
 
 
-# Create a singleton instance
-_mcp_instance = None
+_mcp_instances: Dict[str, MCPTools] = {}
 
 def get_mcp_tools(db_path: str = "support.db") -> MCPTools:
-    """Get or create MCP tools instance.
+    """Get or create an MCPTools instance scoped to db_path.
 
     Args:
         db_path: Path to database
@@ -363,7 +365,8 @@ def get_mcp_tools(db_path: str = "support.db") -> MCPTools:
     Returns:
         MCPTools instance
     """
-    global _mcp_instance
-    if _mcp_instance is None:
-        _mcp_instance = MCPTools(db_path)
-    return _mcp_instance
+    instance = _mcp_instances.get(db_path)
+    if instance is None:
+        instance = MCPTools(db_path)
+        _mcp_instances[db_path] = instance
+    return instance
