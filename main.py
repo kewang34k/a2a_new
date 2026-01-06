@@ -9,6 +9,7 @@ from datetime import datetime
 
 from a2a_system import A2ACoordinationSystem
 from database_setup import DatabaseSetup
+from utils.parsing import extract_customer_id
 
 
 class MultiAgentDemo:
@@ -168,11 +169,8 @@ class MultiAgentDemo:
 
                 # Check if customer ID is provided
                 customer_id = None
-                if "customer" in query.lower() and "id" in query.lower():
-                    import re
-                    match = re.search(r'(\d+)', query)
-                    if match:
-                        customer_id = int(match.group(1))
+                if "customer" in query.lower() or "id" in query.lower():
+                    customer_id = extract_customer_id(query)
 
                 # Process query
                 result = self.a2a_system.process_query(query, customer_id)

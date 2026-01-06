@@ -3,9 +3,11 @@ Router Agent - Orchestrator for multi-agent coordination
 Analyzes queries, routes to appropriate agents, and coordinates responses.
 """
 
-from typing import Dict, Any, List, Optional
+from typing import Dict, Any, List
 import json
-import re
+
+from utils.collections import dedupe_preserve_order
+from utils.parsing import extract_customer_id
 
 
 class RouterAgent:
@@ -29,7 +31,7 @@ class RouterAgent:
         print(f"\n[{self.agent_name}] Analyzing query: '{query}'")
 
         # Extract customer ID if present
-        customer_id = self._extract_customer_id(query)
+        customer_id = extract_customer_id(query)
 
         # Determine intents
         intents = []
@@ -58,10 +60,8 @@ class RouterAgent:
         # Support intents
         if any(word in query_lower for word in ["help", "support", "issue", "problem", "need assistance"]):
             intents.append("support_request")
-            if "CustomerDataAgent" not in required_agents:
-                required_agents.append("SupportAgent")
-            else:
-                required_agents.append("SupportAgent")
+            required_agents.append("SupportAgent")
+            if "CustomerDataAgent" in required_agents:
                 coordination_type = "sequential"
 
         if any(word in query_lower for word in ["upgrade", "downgrade", "cancel", "subscription"]):
@@ -85,7 +85,7 @@ class RouterAgent:
             coordination_type = "negotiation"
 
         # Remove duplicates while preserving order
-        required_agents = list(dict.fromkeys(required_agents))
+        required_agents = dedupe_preserve_order(required_agents)
 
         # Determine priority
         priority = "medium"
@@ -106,30 +106,6 @@ class RouterAgent:
 
         print(f"[{self.agent_name}] Analysis: {json.dumps(result, indent=2)}")
         return result
-
-    def _extract_customer_id(self, query: str) -> Optional[int]:
-        """Extract customer ID from query.
-
-        Args:
-            query: Query string
-
-        Returns:
-            Customer ID if found, None otherwise
-        """
-        # Look for patterns like "customer 123", "ID 123", "customer ID 123"
-        patterns = [
-            r'customer\s+id\s+(\d+)',
-            r'customer\s+(\d+)',
-            r'id\s+(\d+)',
-            r'#(\d+)',
-        ]
-
-        for pattern in patterns:
-            match = re.search(pattern, query.lower())
-            if match:
-                return int(match.group(1))
-
-        return None
 
     def determine_routing(self, intent_analysis: Dict[str, Any]) -> Dict[str, Any]:
         """Determine the routing strategy based on intent analysis.
@@ -335,6 +311,19 @@ class RouterAgent:
         # Support response
         if "response" in result:
             response += f"Support Response:\n{result['response']}\n"
+
+        # Ticket listings (e.g. high-priority tickets query)
+        if "tickets" in result:
+            tickets = result.get("tickets") or []
+            count = result.get("count", len(tickets))
+            response += f"\nSupport Tickets ({count} ticket(s)):\n"
+            for ticket in tickets[:5]:
+                response += (
+                    f"  - Ticket #{ticket['id']}: {ticket['issue']} "
+                    f"({ticket['status']}, {ticket['priority']} priority)\n"
+                )
+            if count > 5:
+                response += f"  ... and {count - 5} more\n"
 
         # Ticket creation
         if "ticket" in result:
