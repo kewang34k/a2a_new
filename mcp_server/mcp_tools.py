@@ -351,11 +351,11 @@ class MCPTools:
             self.conn.close()
 
 
-# Create a singleton instance
-_mcp_instance = None
+# Cache instances by db_path (so different DBs don't share connections)
+_mcp_instances: Dict[str, MCPTools] = {}
 
 def get_mcp_tools(db_path: str = "support.db") -> MCPTools:
-    """Get or create MCP tools instance.
+    """Get or create an MCPTools instance for a given db_path.
 
     Args:
         db_path: Path to database
@@ -363,7 +363,8 @@ def get_mcp_tools(db_path: str = "support.db") -> MCPTools:
     Returns:
         MCPTools instance
     """
-    global _mcp_instance
-    if _mcp_instance is None:
-        _mcp_instance = MCPTools(db_path)
-    return _mcp_instance
+    instance = _mcp_instances.get(db_path)
+    if instance is None:
+        instance = MCPTools(db_path)
+        _mcp_instances[db_path] = instance
+    return instance

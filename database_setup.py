@@ -86,6 +86,15 @@ class DatabaseSetup:
 
     def insert_sample_data(self):
         """Insert sample data for testing."""
+        # Avoid duplicating sample data on repeated runs
+        self.cursor.execute("SELECT COUNT(*) FROM customers")
+        existing_customers = self.cursor.fetchone()[0]
+        if existing_customers and existing_customers > 0:
+            print(
+                f"Sample data already present ({existing_customers} customers). "
+                "Skipping sample inserts to avoid duplicates."
+            )
+            return
 
         # Sample customers (15 customers with diverse data)
         customers = [
@@ -110,6 +119,18 @@ class DatabaseSetup:
             INSERT INTO customers (name, email, phone, status)
             VALUES (?, ?, ?, ?)
         """, customers)
+
+        self.cursor.execute("SELECT COUNT(*) FROM tickets")
+        existing_tickets = self.cursor.fetchone()[0]
+        if existing_tickets and existing_tickets > 0:
+            # Customers were empty (so we inserted), but tickets already exist.
+            # This is an unusual state; skip adding tickets to avoid duplication.
+            self.conn.commit()
+            print(
+                f"Tickets already present ({existing_tickets} tickets). "
+                "Inserted customers only; skipping ticket inserts."
+            )
+            return
 
         # Sample tickets (25 tickets with various statuses and priorities)
         tickets = [

@@ -3,6 +3,19 @@ Quick test script to verify A2A system functionality
 """
 
 from a2a_system import A2ACoordinationSystem
+from database_setup import DatabaseSetup
+
+
+def ensure_test_database(db_path: str = "support.db") -> None:
+    """Ensure the SQLite database exists and is seeded with sample data."""
+    db = DatabaseSetup(db_path)
+    try:
+        db.connect()
+        db.create_tables()
+        db.create_triggers()
+        db.insert_sample_data()
+    finally:
+        db.close()
 
 
 def test_simple_query():
@@ -11,6 +24,7 @@ def test_simple_query():
     print("TEST 1: Simple Query - Get Customer Information")
     print("="*80)
 
+    ensure_test_database("support.db")
     system = A2ACoordinationSystem("support.db")
     result = system.process_query("Get customer information for ID 5")
 
@@ -31,6 +45,7 @@ def test_coordinated_query():
     print("TEST 2: Coordinated Query - Support with Customer Context")
     print("="*80)
 
+    ensure_test_database("support.db")
     system = A2ACoordinationSystem("support.db")
     result = system.process_query("I need help with my account, customer ID 1")
 
@@ -50,6 +65,7 @@ def test_complex_query():
     print("TEST 3: Complex Query - Active Customers with Open Tickets")
     print("="*80)
 
+    ensure_test_database("support.db")
     system = A2ACoordinationSystem("support.db")
     result = system.process_query("Show me all active customers who have open tickets")
 
@@ -79,7 +95,7 @@ def main():
         print("="*80)
 
         print("\nThe system is ready to use!")
-        print("Run 'python main.py' to start the full application.")
+        print("Run 'python3 main.py' to start the full application.")
 
     except Exception as e:
         print(f"\n\n✗ Test failed with error: {str(e)}")

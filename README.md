@@ -216,7 +216,7 @@ The system successfully handles these scenarios:
 The system includes an automated database setup script:
 
 ```bash
-python database_setup.py
+python3 database_setup.py
 ```
 
 This will:
@@ -233,7 +233,7 @@ This will:
 ### Running the Main Application
 
 ```bash
-python main.py
+python3 main.py
 ```
 
 ### Main Menu Options
@@ -359,7 +359,7 @@ This state-based approach ensures:
 Run individual scenarios in interactive mode:
 
 ```bash
-python main.py
+python3 main.py
 # Select option 2 for interactive mode
 ```
 
@@ -375,7 +375,7 @@ Example queries:
 The main application includes 5 predefined test scenarios that can be run automatically:
 
 ```bash
-python main.py
+python3 main.py
 # Select option 1
 ```
 
