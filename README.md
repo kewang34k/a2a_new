@@ -186,7 +186,8 @@ The system successfully handles these scenarios:
 
 1. **Clone the repository**
    ```bash
-   cd /path/to/a2a_new
+   # cd into the repository root after cloning
+   cd /path/to/repo
    ```
 
 2. **Create a Python virtual environment**
@@ -213,18 +214,16 @@ The system successfully handles these scenarios:
 
 ### Database Setup
 
-The system includes an automated database setup script:
+The system includes a database setup script:
 
 ```bash
 python3 database_setup.py
 ```
 
-This will:
-- Create SQLite database (`support.db`)
-- Create customers and tickets tables
-- Insert 15 sample customers
-- Insert 25 sample tickets with various priorities
-- Create indexes for performance
+Notes:
+- This script is **interactive** (it will prompt before inserting sample data).
+- Sample inserts are **idempotent**: if data already exists, it will skip inserting duplicates.
+- You can also skip running this script and just start the app; `main.py` will create/seed the DB automatically.
 
 ---
 
@@ -354,6 +353,14 @@ This state-based approach ensures:
 
 ## 🧪 Testing
 
+### Quick Smoke Test (non-interactive)
+
+This repo includes a quick test script that bootstraps the DB automatically:
+
+```bash
+python3 test_system.py
+```
+
 ### Manual Testing
 
 Run individual scenarios in interactive mode:
@@ -459,7 +466,7 @@ This project demonstrates:
 ## 🚧 Common Issues & Solutions
 
 ### Issue: Database not found
-**Solution:** Run `python database_setup.py` first
+**Solution:** Run `python3 database_setup.py` first (or just run `python3 main.py`, which sets up the DB automatically)
 
 ### Issue: Import errors
 **Solution:** Ensure virtual environment is activated and dependencies are installed
@@ -527,8 +534,8 @@ This is an educational project for learning multi-agent systems and A2A coordina
 
 ## 🎯 Next Steps
 
-1. Run the database setup: `python database_setup.py`
-2. Start the application: `python main.py`
+1. Run the database setup: `python3 database_setup.py` (optional)
+2. Start the application: `python3 main.py`
 3. Try test scenarios (option 1)
 4. Experiment in interactive mode (option 2)
 5. Review coordination logs in `logs/` directory
