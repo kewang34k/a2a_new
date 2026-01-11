@@ -58,10 +58,8 @@ class RouterAgent:
         # Support intents
         if any(word in query_lower for word in ["help", "support", "issue", "problem", "need assistance"]):
             intents.append("support_request")
-            if "CustomerDataAgent" not in required_agents:
-                required_agents.append("SupportAgent")
-            else:
-                required_agents.append("SupportAgent")
+            required_agents.append("SupportAgent")
+            if "CustomerDataAgent" in required_agents:
                 coordination_type = "sequential"
 
         if any(word in query_lower for word in ["upgrade", "downgrade", "cancel", "subscription"]):
