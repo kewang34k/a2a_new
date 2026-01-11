@@ -6,6 +6,7 @@ Multi-agent system using message passing and state management for customer suppo
 from typing import Dict, Any, List, Optional
 from dataclasses import dataclass, field
 import json
+import re
 from datetime import datetime
 
 from agents.router_agent import RouterAgent
@@ -221,7 +222,7 @@ class A2ACoordinationSystem:
         state.current_agent = agent_name
 
         # Determine action and parameters
-        action = self._determine_action(state)
+        action = self._determine_action_for_agent(agent_name, state)
         params = self._build_params(state, action)
 
         # Execute
@@ -360,21 +361,6 @@ class A2ACoordinationSystem:
 
         return result
 
-    def _determine_action(self, state: AgentState) -> str:
-        """Determine action based on state."""
-        if "get_customer_data" in state.intents:
-            return "get_customer"
-        elif "list_customers" in state.intents:
-            return "list_customers"
-        elif "get_history" in state.intents:
-            return "get_customer_history"
-        elif "update_data" in state.intents:
-            return "update_customer"
-        elif "support_request" in state.intents:
-            return "handle_support_query"
-        else:
-            return "get_customer"
-
     def _determine_action_for_agent(self, agent_name: str, state: AgentState) -> str:
         """Determine specific action for an agent based on context."""
         if agent_name == "CustomerDataAgent":
@@ -408,7 +394,7 @@ class A2ACoordinationSystem:
         params = {}
 
         # Add customer_id if available
-        if state.customer_id:
+        if state.customer_id is not None:
             params["customer_id"] = state.customer_id
 
         # Add query for analysis/support actions
@@ -425,7 +411,6 @@ class A2ACoordinationSystem:
         if "update_data" in state.intents:
             # Extract update data from query (simplified - in production, use LLM)
             if "email" in state.query.lower():
-                import re
                 email_match = re.search(r'[\w\.-]+@[\w\.-]+\.\w+', state.query)
                 if email_match:
                     params["data"] = {"email": email_match.group(0)}
