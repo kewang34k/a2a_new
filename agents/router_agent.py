@@ -5,7 +5,8 @@ Analyzes queries, routes to appropriate agents, and coordinates responses.
 
 from typing import Dict, Any, List, Optional
 import json
-import re
+
+from utils.query_parsing import extract_customer_id
 
 
 class RouterAgent:
@@ -116,20 +117,7 @@ class RouterAgent:
         Returns:
             Customer ID if found, None otherwise
         """
-        # Look for patterns like "customer 123", "ID 123", "customer ID 123"
-        patterns = [
-            r'customer\s+id\s+(\d+)',
-            r'customer\s+(\d+)',
-            r'id\s+(\d+)',
-            r'#(\d+)',
-        ]
-
-        for pattern in patterns:
-            match = re.search(pattern, query.lower())
-            if match:
-                return int(match.group(1))
-
-        return None
+        return extract_customer_id(query)
 
     def determine_routing(self, intent_analysis: Dict[str, Any]) -> Dict[str, Any]:
         """Determine the routing strategy based on intent analysis.
