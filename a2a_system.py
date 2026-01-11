@@ -6,11 +6,14 @@ Multi-agent system using message passing and state management for customer suppo
 from typing import Dict, Any, List, Optional
 from dataclasses import dataclass, field
 import json
+import re
 from datetime import datetime
 
 from agents.router_agent import RouterAgent
 from agents.customer_data_agent import CustomerDataAgent
 from agents.support_agent import SupportAgent
+
+EMAIL_REGEX = re.compile(r'[\w\.-]+@[\w\.-]+\.\w+')
 
 
 @dataclass
@@ -67,6 +70,30 @@ class AgentState:
 
 class A2ACoordinationSystem:
     """Agent-to-Agent coordination system using state-based message passing."""
+
+    INTENT_ACTIONS = [
+        ("get_customer_data", "get_customer"),
+        ("list_customers", "list_customers"),
+        ("get_history", "get_customer_history"),
+        ("update_data", "update_customer"),
+        ("support_request", "handle_support_query"),
+    ]
+
+    CUSTOMER_AGENT_ACTIONS = [
+        ("get_customer_data", "get_customer"),
+        ("support_request", "get_customer"),
+        ("list_customers", "list_customers"),
+        ("get_history", "get_customer_history"),
+        ("update_data", "update_customer"),
+        ("complex_query", "get_active_customers_with_open_tickets"),
+    ]
+
+    SUPPORT_AGENT_ACTIONS = [
+        ("billing_issue", "escalate_issue"),
+        ("support_request", "handle_support_query"),
+        ("account_management", "handle_support_query"),
+        ("complex_query", "get_high_priority_tickets"),
+    ]
 
     def __init__(self, db_path: str = "support.db"):
         """Initialize A2A system with all agents.
@@ -362,50 +389,46 @@ class A2ACoordinationSystem:
 
     def _determine_action(self, state: AgentState) -> str:
         """Determine action based on state."""
-        if "get_customer_data" in state.intents:
-            return "get_customer"
-        elif "list_customers" in state.intents:
-            return "list_customers"
-        elif "get_history" in state.intents:
-            return "get_customer_history"
-        elif "update_data" in state.intents:
-            return "update_customer"
-        elif "support_request" in state.intents:
-            return "handle_support_query"
-        else:
-            return "get_customer"
+        return self._select_action_from_intents(
+            state.intents,
+            self.INTENT_ACTIONS,
+            default="get_customer"
+        )
 
     def _determine_action_for_agent(self, agent_name: str, state: AgentState) -> str:
         """Determine specific action for an agent based on context."""
         if agent_name == "CustomerDataAgent":
-            if "get_customer_data" in state.intents or "support_request" in state.intents:
-                return "get_customer"
-            elif "list_customers" in state.intents:
-                return "list_customers"
-            elif "get_history" in state.intents:
-                return "get_customer_history"
-            elif "update_data" in state.intents:
-                return "update_customer"
-            elif "complex_query" in state.intents:
-                return "get_active_customers_with_open_tickets"
-            else:
-                return "get_customer"
+            return self._select_action_from_intents(
+                state.intents,
+                self.CUSTOMER_AGENT_ACTIONS,
+                default="get_customer"
+            )
 
-        elif agent_name == "SupportAgent":
-            if "billing_issue" in state.intents:
-                return "escalate_issue"
-            elif "support_request" in state.intents or "account_management" in state.intents:
-                return "handle_support_query"
-            elif "complex_query" in state.intents:
-                return "get_high_priority_tickets"
-            else:
-                return "analyze_query"
+        if agent_name == "SupportAgent":
+            return self._select_action_from_intents(
+                state.intents,
+                self.SUPPORT_AGENT_ACTIONS,
+                default="analyze_query"
+            )
 
         return "analyze_query"
+
+    @staticmethod
+    def _select_action_from_intents(
+        intents: List[str],
+        action_map: List[tuple],
+        default: str
+    ) -> str:
+        """Select the first matching action from an ordered intent/action map."""
+        for intent, action in action_map:
+            if intent in intents:
+                return action
+        return default
 
     def _build_params(self, state: AgentState, action: str) -> Dict[str, Any]:
         """Build parameters for an action based on current state."""
         params = {}
+        query_lower = state.query.lower()
 
         # Add customer_id if available
         if state.customer_id:
@@ -424,9 +447,8 @@ class A2ACoordinationSystem:
         # Add specific parameters based on intent
         if "update_data" in state.intents:
             # Extract update data from query (simplified - in production, use LLM)
-            if "email" in state.query.lower():
-                import re
-                email_match = re.search(r'[\w\.-]+@[\w\.-]+\.\w+', state.query)
+            if "email" in query_lower:
+                email_match = EMAIL_REGEX.search(state.query)
                 if email_match:
                     params["data"] = {"email": email_match.group(0)}
 
@@ -436,9 +458,9 @@ class A2ACoordinationSystem:
 
         # For list operations
         if action == "list_customers":
-            if "active" in state.query.lower():
+            if "active" in query_lower:
                 params["status"] = "active"
-            elif "disabled" in state.query.lower():
+            elif "disabled" in query_lower:
                 params["status"] = "disabled"
 
         return params
