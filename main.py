@@ -4,6 +4,7 @@ Demonstrates A2A coordination with 5 test scenarios.
 """
 
 import sys
+import re
 from pathlib import Path
 from datetime import datetime
 
@@ -169,7 +170,6 @@ class MultiAgentDemo:
                 # Check if customer ID is provided
                 customer_id = None
                 if "customer" in query.lower() and "id" in query.lower():
-                    import re
                     match = re.search(r'(\d+)', query)
                     if match:
                         customer_id = int(match.group(1))
