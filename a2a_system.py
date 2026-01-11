@@ -11,6 +11,7 @@ from datetime import datetime
 from agents.router_agent import RouterAgent
 from agents.customer_data_agent import CustomerDataAgent
 from agents.support_agent import SupportAgent
+from utils.query_parsing import extract_email
 
 
 @dataclass
@@ -425,10 +426,9 @@ class A2ACoordinationSystem:
         if "update_data" in state.intents:
             # Extract update data from query (simplified - in production, use LLM)
             if "email" in state.query.lower():
-                import re
-                email_match = re.search(r'[\w\.-]+@[\w\.-]+\.\w+', state.query)
-                if email_match:
-                    params["data"] = {"email": email_match.group(0)}
+                email = extract_email(state.query)
+                if email:
+                    params["data"] = {"email": email}
 
         if "billing_issue" in state.intents:
             params["issue"] = state.query
