@@ -1,0 +1,674 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>像素机甲对战</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body {
+    background: #0a0a1a;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    min-height: 100vh;
+    font-family: 'Courier New', monospace;
+    overflow: hidden;
+  }
+  #gameCanvas {
+    border: 3px solid #333;
+    image-rendering: pixelated;
+    image-rendering: crisp-edges;
+    max-width: 95vw;
+    max-height: 85vh;
+  }
+  #controls {
+    color: #888;
+    font-size: 11px;
+    margin-top: 12px;
+    text-align: center;
+    line-height: 1.8;
+    letter-spacing: 1px;
+  }
+  #controls span { color: #ffcc00; }
+</style>
+</head>
+<body>
+<canvas id="gameCanvas" width="900" height="500"></canvas>
+<div id="controls">
+  <span>P1</span>: WASD 移动 | J 攻击 | K 防御 &nbsp;&nbsp;|&nbsp;&nbsp;
+  <span>P2</span>: ↑↓←→ 移动 | 1 攻击 | 2 防御
+</div>
+<script>
+// ==================== 游戏核心 ====================
+const canvas = document.getElementById('gameCanvas');
+const ctx = canvas.getContext('2d');
+const W = 900, H = 500;
+const GROUND = 400;
+const PIXEL = 3; // 像素块大小
+
+// 游戏状态
+let gameState = 'start'; // start, playing, gameover
+let winner = '';
+let frameCount = 0;
+let particles = [];
+let screenShake = 0;
+
+// ==================== 输入处理 ====================
+const keys = {};
+window.addEventListener('keydown', e => {
+  keys[e.key] = true;
+  keys[e.code] = true;
+  if (['ArrowUp','ArrowDown','ArrowLeft','ArrowRight',' '].includes(e.key)) e.preventDefault();
+  // 开始/重新开始
+  if (gameState === 'start' && (e.key === ' ' || e.key === 'Enter')) {
+    gameState = 'playing';
+    resetGame();
+  }
+  if (gameState === 'gameover' && (e.key === ' ' || e.key === 'Enter')) {
+    gameState = 'playing';
+    resetGame();
+  }
+});
+window.addEventListener('keyup', e => {
+  keys[e.key] = false;
+  keys[e.code] = false;
+});
+
+// ==================== 粒子系统 ====================
+class Particle {
+  constructor(x, y, color) {
+    this.x = x;
+    this.y = y;
+    this.vx = (Math.random() - 0.5) * 8;
+    this.vy = (Math.random() - 0.5) * 8 - 2;
+    this.life = 20 + Math.random() * 20;
+    this.maxLife = this.life;
+    this.color = color;
+    this.size = 2 + Math.random() * 4;
+  }
+  update() {
+    this.x += this.vx;
+    this.y += this.vy;
+    this.vy += 0.2;
+    this.life--;
+  }
+  draw() {
+    const alpha = this.life / this.maxLife;
+    ctx.globalAlpha = alpha;
+    ctx.fillStyle = this.color;
+    ctx.fillRect(Math.floor(this.x), Math.floor(this.y), this.size, this.size);
+    ctx.globalAlpha = 1;
+  }
+}
+
+function spawnParticles(x, y, color, count = 12) {
+  for (let i = 0; i < count; i++) {
+    particles.push(new Particle(x, y, color));
+  }
+}
+
+// ==================== 机甲类 ====================
+class PixelMech {
+  constructor(x, facing, colorScheme, name) {
+    this.x = x;
+    this.y = GROUND;
+    this.width = 48;
+    this.height = 64;
+    this.facing = facing; // 1=右, -1=左
+    this.colors = colorScheme;
+    this.name = name;
+    this.hp = 100;
+    this.maxHp = 100;
+    this.speed = 3.5;
+    this.vx = 0;
+    this.vy = 0;
+    this.jumping = false;
+    this.grounded = true;
+
+    // 状态机
+    this.state = 'idle'; // idle, walk, attack, defend, hit
+    this.stateTimer = 0;
+    this.attackCooldown = 0;
+    this.defendCooldown = 0;
+    this.hitTimer = 0;
+    this.animFrame = 0;
+
+    // 攻击判定
+    this.attackBox = { x: 0, y: 0, w: 30, h: 20 };
+    this.hasHit = false;
+  }
+
+  reset(x) {
+    this.x = x;
+    this.y = GROUND;
+    this.hp = 100;
+    this.vx = 0;
+    this.vy = 0;
+    this.jumping = false;
+    this.grounded = true;
+    this.state = 'idle';
+    this.stateTimer = 0;
+    this.attackCooldown = 0;
+    this.defendCooldown = 0;
+    this.hitTimer = 0;
+    this.hasHit = false;
+  }
+
+  update() {
+    this.animFrame++;
+    if (this.attackCooldown > 0) this.attackCooldown--;
+    if (this.defendCooldown > 0) this.defendCooldown--;
+    if (this.hitTimer > 0) this.hitTimer--;
+
+    // 状态计时
+    if (this.stateTimer > 0) {
+      this.stateTimer--;
+      if (this.stateTimer === 0) {
+        if (this.state === 'attack' || this.state === 'defend' || this.state === 'hit') {
+          this.state = 'idle';
+        }
+      }
+    }
+
+    // 受击状态不能操作
+    if (this.state === 'hit') return;
+
+    // 攻击/防御状态不能移动
+    if (this.state === 'attack' || this.state === 'defend') return;
+
+    // 移动
+    this.vx = 0;
+    if (this.isKeyDown('left')) { this.vx = -this.speed; this.facing = -1; }
+    if (this.isKeyDown('right')) { this.vx = this.speed; this.facing = 1; }
+    if (this.vx !== 0 && this.state !== 'walk') this.state = 'walk';
+    if (this.vx === 0 && this.state === 'walk') this.state = 'idle';
+
+    // 跳跃
+    if (this.isKeyDown('up') && this.grounded) {
+      this.vy = -10;
+      this.jumping = true;
+      this.grounded = false;
+    }
+
+    // 攻击
+    if (this.isKeyDown('attack') && this.attackCooldown === 0) {
+      this.state = 'attack';
+      this.stateTimer = 20;
+      this.attackCooldown = 35;
+      this.hasHit = false;
+    }
+
+    // 防御
+    if (this.isKeyDown('defend') && this.defendCooldown === 0) {
+      this.state = 'defend';
+      this.stateTimer = 30;
+      this.defendCooldown = 50;
+    }
+
+    // 物理
+    this.x += this.vx;
+    this.vy += 0.5; // 重力
+    this.y += this.vy;
+
+    if (this.y >= GROUND) {
+      this.y = GROUND;
+      this.vy = 0;
+      this.jumping = false;
+      this.grounded = true;
+    }
+
+    // 边界限制
+    if (this.x < 20) this.x = 20;
+    if (this.x > W - 20 - this.width) this.x = W - 20 - this.width;
+  }
+
+  isKeyDown(action) {
+    return false; // 由子类重写
+  }
+
+  takeDamage(dmg) {
+    if (this.state === 'defend') {
+      dmg = Math.floor(dmg * 0.2);
+      spawnParticles(this.x + this.width / 2, this.y - this.height / 2, '#66ccff', 6);
+    } else {
+      this.state = 'hit';
+      this.stateTimer = 15;
+      this.hitTimer = 15;
+      spawnParticles(this.x + this.width / 2, this.y - this.height / 2, '#ff4444', 15);
+      screenShake = 6;
+    }
+    this.hp = Math.max(0, this.hp - dmg);
+  }
+
+  getAttackBox() {
+    if (this.state !== 'attack') return null;
+    if (this.stateTimer < 8 || this.stateTimer > 16) return null;
+    const bx = this.facing === 1 ? this.x + this.width : this.x - 30;
+    return { x: bx, y: this.y - 50, w: 30, h: 20 };
+  }
+
+  // ==================== 绘制机甲 ====================
+  draw() {
+    ctx.save();
+    const cx = this.x + this.width / 2;
+    const cy = this.y;
+    ctx.translate(cx, cy);
+    ctx.scale(this.facing, 1);
+
+    // 受击闪烁
+    if (this.hitTimer > 0 && Math.floor(this.hitTimer / 3) % 2 === 0) {
+      ctx.globalAlpha = 0.4;
+    }
+
+    const P = PIXEL;
+    const c = this.colors;
+
+    // === 腿部 ===
+    const walkOffset = this.state === 'walk' ? Math.sin(this.animFrame * 0.3) * 4 : 0;
+    // 左腿
+    ctx.fillStyle = c.leg;
+    ctx.fillRect(-12 * P / 2 - 2, -18 * P / 2 + walkOffset, 5 * P / 2, 18 * P / 2);
+    ctx.fillStyle = c.legDark;
+    ctx.fillRect(-12 * P / 2 - 2, -4 * P / 2 + walkOffset, 6 * P / 2, 4 * P / 2); // 脚
+    // 右腿
+    ctx.fillStyle = c.leg;
+    ctx.fillRect(2, -18 * P / 2 - walkOffset, 5 * P / 2, 18 * P / 2);
+    ctx.fillStyle = c.legDark;
+    ctx.fillRect(1, -4 * P / 2 - walkOffset, 6 * P / 2, 4 * P / 2); // 脚
+
+    // === 身体 ===
+    ctx.fillStyle = c.body;
+    ctx.fillRect(-8 * P / 2, -38 * P / 2, 16 * P / 2, 22 * P / 2);
+    // 胸甲
+    ctx.fillStyle = c.chest;
+    ctx.fillRect(-6 * P / 2, -36 * P / 2, 12 * P / 2, 8 * P / 2);
+    // 腰带
+    ctx.fillStyle = c.belt;
+    ctx.fillRect(-7 * P / 2, -20 * P / 2, 14 * P / 2, 3 * P / 2);
+    // 核心发光
+    ctx.fillStyle = c.core;
+    const coreGlow = 0.5 + Math.sin(this.animFrame * 0.1) * 0.3;
+    ctx.globalAlpha = ctx.globalAlpha * coreGlow;
+    ctx.fillRect(-2 * P / 2, -33 * P / 2, 4 * P / 2, 4 * P / 2);
+    ctx.globalAlpha = this.hitTimer > 0 && Math.floor(this.hitTimer / 3) % 2 === 0 ? 0.4 : 1;
+
+    // === 手臂 ===
+    if (this.state === 'attack') {
+      // 出拳
+      const punchExtend = this.stateTimer > 10 ? (16 - this.stateTimer) * 3 : this.stateTimer > 6 ? 18 : (this.stateTimer - 1) * 3;
+      // 后手
+      ctx.fillStyle = c.arm;
+      ctx.fillRect(-10 * P / 2, -34 * P / 2, 4 * P / 2, 12 * P / 2);
+      // 前手（拳头）
+      ctx.fillStyle = c.arm;
+      ctx.fillRect(6 * P / 2, -34 * P / 2, 4 * P / 2 + punchExtend, 5 * P / 2);
+      ctx.fillStyle = c.fist;
+      ctx.fillRect(6 * P / 2 + 4 * P / 2 + punchExtend - 4, -35 * P / 2, 6, 7);
+    } else if (this.state === 'defend') {
+      // 防御姿势 - 双手交叉在前
+      ctx.fillStyle = c.arm;
+      ctx.fillRect(2 * P / 2, -38 * P / 2, 5 * P / 2, 14 * P / 2);
+      ctx.fillRect(-2 * P / 2, -36 * P / 2, 5 * P / 2, 12 * P / 2);
+      // 护盾效果
+      ctx.strokeStyle = c.shield;
+      ctx.lineWidth = 2;
+      ctx.globalAlpha = 0.4 + Math.sin(this.animFrame * 0.2) * 0.2;
+      ctx.beginPath();
+      ctx.arc(4, -30, 20, -Math.PI / 2, Math.PI / 2);
+      ctx.stroke();
+      ctx.globalAlpha = this.hitTimer > 0 && Math.floor(this.hitTimer / 3) % 2 === 0 ? 0.4 : 1;
+    } else {
+      // 普通手臂
+      const armSwing = this.state === 'walk' ? Math.sin(this.animFrame * 0.3) * 3 : 0;
+      ctx.fillStyle = c.arm;
+      ctx.fillRect(-10 * P / 2, -34 * P / 2 + armSwing, 4 * P / 2, 12 * P / 2);
+      ctx.fillRect(6 * P / 2, -34 * P / 2 - armSwing, 4 * P / 2, 12 * P / 2);
+      // 拳头
+      ctx.fillStyle = c.fist;
+      ctx.fillRect(-10 * P / 2, -23 * P / 2 + armSwing, 5 * P / 2, 4 * P / 2);
+      ctx.fillRect(6 * P / 2, -23 * P / 2 - armSwing, 5 * P / 2, 4 * P / 2);
+    }
+
+    // === 头部 ===
+    ctx.fillStyle = c.head;
+    ctx.fillRect(-6 * P / 2, -48 * P / 2, 12 * P / 2, 10 * P / 2);
+    // 面罩
+    ctx.fillStyle = c.visor;
+    ctx.fillRect(-4 * P / 2, -45 * P / 2, 10 * P / 2, 4 * P / 2);
+    // 眼睛（发光）
+    ctx.fillStyle = c.eye;
+    ctx.fillRect(-3 * P / 2, -44 * P / 2, 3 * P / 2, 2 * P / 2);
+    ctx.fillRect(1 * P / 2, -44 * P / 2, 3 * P / 2, 2 * P / 2);
+    // 天线
+    ctx.fillStyle = c.antenna;
+    ctx.fillRect(-1, -52 * P / 2, 2, 4 * P / 2);
+    ctx.fillStyle = c.eye;
+    ctx.fillRect(-1, -53 * P / 2, 2, 2);
+
+    ctx.restore();
+  }
+}
+
+// ==================== 玩家1 & 玩家2 ====================
+class Player1 extends PixelMech {
+  constructor() {
+    super(100, 1, {
+      body: '#4466aa', chest: '#5577cc', leg: '#334477', legDark: '#223355',
+      arm: '#4466aa', fist: '#5577cc', head: '#5577cc', visor: '#1a1a2e',
+      eye: '#00ffff', core: '#00ffff', belt: '#8899bb', shield: '#00ccff',
+      antenna: '#8899bb'
+    }, 'P1 蓝鹰');
+  }
+  isKeyDown(action) {
+    switch (action) {
+      case 'left': return keys['a'] || keys['A'];
+      case 'right': return keys['d'] || keys['D'];
+      case 'up': return keys['w'] || keys['W'];
+      case 'attack': return keys['j'] || keys['J'];
+      case 'defend': return keys['k'] || keys['K'];
+    }
+  }
+}
+
+class Player2 extends PixelMech {
+  constructor() {
+    super(700, -1, {
+      body: '#aa3344', chest: '#cc4455', leg: '#772233', legDark: '#551122',
+      arm: '#aa3344', fist: '#cc4455', head: '#cc4455', visor: '#1a1a2e',
+      eye: '#ffcc00', core: '#ffcc00', belt: '#bb8899', shield: '#ff6644',
+      antenna: '#bb8899'
+    }, 'P2 红狼');
+  }
+  isKeyDown(action) {
+    switch (action) {
+      case 'left': return keys['ArrowLeft'];
+      case 'right': return keys['ArrowRight'];
+      case 'up': return keys['ArrowUp'];
+      case 'attack': return keys['1'];
+      case 'defend': return keys['2'];
+    }
+  }
+}
+
+// ==================== 背景绘制 ====================
+// 预生成星星
+const stars = [];
+for (let i = 0; i < 80; i++) {
+  stars.push({
+    x: Math.random() * W,
+    y: Math.random() * (GROUND - 60),
+    size: Math.random() < 0.3 ? 2 : 1,
+    twinkle: Math.random() * Math.PI * 2
+  });
+}
+
+// 预生成建筑
+const buildings = [];
+for (let i = 0; i < 12; i++) {
+  buildings.push({
+    x: i * 80 - 20 + Math.random() * 20,
+    w: 40 + Math.random() * 50,
+    h: 60 + Math.random() * 120,
+    color: `hsl(220, ${10 + Math.random() * 15}%, ${8 + Math.random() * 10}%)`
+  });
+}
+
+function drawBackground() {
+  // 天空渐变
+  const skyGrad = ctx.createLinearGradient(0, 0, 0, GROUND);
+  skyGrad.addColorStop(0, '#0a0a2e');
+  skyGrad.addColorStop(0.5, '#141432');
+  skyGrad.addColorStop(1, '#1a1a3a');
+  ctx.fillStyle = skyGrad;
+  ctx.fillRect(0, 0, W, GROUND);
+
+  // 星星
+  stars.forEach(s => {
+    const alpha = 0.4 + Math.sin(frameCount * 0.03 + s.twinkle) * 0.3;
+    ctx.globalAlpha = alpha;
+    ctx.fillStyle = '#ffffff';
+    ctx.fillRect(Math.floor(s.x), Math.floor(s.y), s.size, s.size);
+  });
+  ctx.globalAlpha = 1;
+
+  // 远处建筑剪影
+  buildings.forEach(b => {
+    ctx.fillStyle = b.color;
+    ctx.fillRect(b.x, GROUND - b.h, b.w, b.h);
+    // 窗户
+    ctx.fillStyle = 'rgba(255, 200, 50, 0.15)';
+    for (let wy = GROUND - b.h + 8; wy < GROUND - 8; wy += 14) {
+      for (let wx = b.x + 6; wx < b.x + b.w - 6; wx += 12) {
+        if (Math.random() > 0.3) {
+          ctx.fillRect(wx, wy, 5, 6);
+        }
+      }
+    }
+  });
+
+  // 地面
+  ctx.fillStyle = '#2a2a3a';
+  ctx.fillRect(0, GROUND, W, H - GROUND);
+  // 地面纹理线
+  ctx.fillStyle = '#333348';
+  for (let gx = 0; gx < W; gx += 30) {
+    ctx.fillRect(gx, GROUND, 1, H - GROUND);
+  }
+  ctx.fillStyle = '#3a3a50';
+  ctx.fillRect(0, GROUND, W, 2);
+  ctx.fillStyle = '#222238';
+  ctx.fillRect(0, GROUND + 2, W, 1);
+}
+
+// ==================== HUD 绘制 ====================
+function drawHUD(p1, p2) {
+  // 血条背景
+  const barW = 300, barH = 20, barY = 20;
+
+  // P1 血条（左对齐）
+  ctx.fillStyle = '#1a1a2e';
+  ctx.fillRect(20, barY, barW, barH);
+  ctx.strokeStyle = '#4466aa';
+  ctx.lineWidth = 2;
+  ctx.strokeRect(20, barY, barW, barH);
+  // 血量
+  const hp1W = (p1.hp / p1.maxHp) * (barW - 4);
+  const hp1Color = p1.hp > 50 ? '#00cc66' : p1.hp > 25 ? '#ccaa00' : '#cc3333';
+  ctx.fillStyle = hp1Color;
+  ctx.fillRect(22, barY + 2, hp1W, barH - 4);
+  // 高光
+  ctx.fillStyle = 'rgba(255,255,255,0.15)';
+  ctx.fillRect(22, barY + 2, hp1W, (barH - 4) / 2);
+  // 名字
+  ctx.fillStyle = '#88aaff';
+  ctx.font = '12px "Courier New", monospace';
+  ctx.textAlign = 'left';
+  ctx.fillText(p1.name, 22, barY - 5);
+  // HP数值
+  ctx.fillStyle = '#ffffff';
+  ctx.fillText(`${p1.hp}/${p1.maxHp}`, 22 + barW - 60, barY + 15);
+
+  // P2 血条（右对齐）
+  const p2BarX = W - 20 - barW;
+  ctx.fillStyle = '#1a1a2e';
+  ctx.fillRect(p2BarX, barY, barW, barH);
+  ctx.strokeStyle = '#aa3344';
+  ctx.lineWidth = 2;
+  ctx.strokeRect(p2BarX, barY, barW, barH);
+  // 血量
+  const hp2W = (p2.hp / p2.maxHp) * (barW - 4);
+  const hp2Color = p2.hp > 50 ? '#00cc66' : p2.hp > 25 ? '#ccaa00' : '#cc3333';
+  ctx.fillStyle = hp2Color;
+  ctx.fillRect(p2BarX + barW - 2 - hp2W, barY + 2, hp2W, barH - 4);
+  // 高光
+  ctx.fillStyle = 'rgba(255,255,255,0.15)';
+  ctx.fillRect(p2BarX + barW - 2 - hp2W, barY + 2, hp2W, (barH - 4) / 2);
+  // 名字
+  ctx.fillStyle = '#ff8888';
+  ctx.textAlign = 'right';
+  ctx.fillText(p2.name, W - 22, barY - 5);
+  // HP数值
+  ctx.fillStyle = '#ffffff';
+  ctx.textAlign = 'right';
+  ctx.fillText(`${p2.hp}/${p2.maxHp}`, W - 22 - barW + 60, barY + 15);
+
+  // VS
+  ctx.fillStyle = '#ffcc00';
+  ctx.font = 'bold 18px "Courier New", monospace';
+  ctx.textAlign = 'center';
+  ctx.fillText('VS', W / 2, barY + 16);
+}
+
+// ==================== 碰撞检测 ====================
+function boxOverlap(a, b) {
+  return a.x < b.x + b.w && a.x + a.w > b.x && a.y < b.y + b.h && a.y + a.h > b.y;
+}
+
+// ==================== 游戏逻辑 ====================
+let p1, p2;
+
+function resetGame() {
+  p1 = new Player1();
+  p2 = new Player2();
+  particles = [];
+  screenShake = 0;
+  winner = '';
+}
+
+function checkAttacks() {
+  // P1 攻击 P2
+  const atk1 = p1.getAttackBox();
+  if (atk1 && !p1.hasHit) {
+    const p2Box = { x: p2.x, y: p2.y - p2.height, w: p2.width, h: p2.height };
+    if (boxOverlap(atk1, p2Box)) {
+      p2.takeDamage(15);
+      p1.hasHit = true;
+      spawnParticles(atk1.x + atk1.w / 2, atk1.y + atk1.h / 2, '#ffaa00', 10);
+    }
+  }
+
+  // P2 攻击 P1
+  const atk2 = p2.getAttackBox();
+  if (atk2 && !p2.hasHit) {
+    const p1Box = { x: p1.x, y: p1.y - p1.height, w: p1.width, h: p1.height };
+    if (boxOverlap(atk2, p1Box)) {
+      p1.takeDamage(15);
+      p2.hasHit = true;
+      spawnParticles(atk2.x + atk2.w / 2, atk2.y + atk2.h / 2, '#ffaa00', 10);
+    }
+  }
+}
+
+function checkGameOver() {
+  if (p1.hp <= 0) { winner = p2.name; gameState = 'gameover'; }
+  if (p2.hp <= 0) { winner = p1.name; gameState = 'gameover'; }
+}
+
+// ==================== 画面绘制 ====================
+function drawStartScreen() {
+  drawBackground();
+
+  // 标题
+  ctx.fillStyle = '#ffcc00';
+  ctx.font = 'bold 36px "Courier New", monospace';
+  ctx.textAlign = 'center';
+  ctx.fillText('PIXEL MECH BATTLE', W / 2, 150);
+
+  ctx.fillStyle = '#8888aa';
+  ctx.font = '16px "Courier New", monospace';
+  ctx.fillText('像 素 机 甲 对 战', W / 2, 185);
+
+  // 闪烁提示
+  if (Math.floor(frameCount / 30) % 2 === 0) {
+    ctx.fillStyle = '#ffffff';
+    ctx.font = '14px "Courier New", monospace';
+    ctx.fillText('按 空格键 或 回车键 开始游戏', W / 2, 280);
+  }
+
+  // 操作说明
+  ctx.fillStyle = '#6688cc';
+  ctx.font = '12px "Courier New", monospace';
+  ctx.fillText('P1: WASD 移动 | J 攻击 | K 防御', W / 2, 340);
+  ctx.fillStyle = '#cc6688';
+  ctx.fillText('P2: 方向键 移动 | 1 攻击 | 2 防御', W / 2, 365);
+}
+
+function drawGameOverScreen() {
+  // 半透明遮罩
+  ctx.fillStyle = 'rgba(0, 0, 0, 0.6)';
+  ctx.fillRect(0, 0, W, H);
+
+  // 胜者
+  ctx.fillStyle = '#ffcc00';
+  ctx.font = 'bold 32px "Courier New", monospace';
+  ctx.textAlign = 'center';
+  ctx.fillText(`${winner} 胜利!`, W / 2, 200);
+
+  // KO
+  ctx.fillStyle = '#ff4444';
+  ctx.font = 'bold 48px "Courier New", monospace';
+  ctx.fillText('K.O.', W / 2, 260);
+
+  // 重新开始提示
+  if (Math.floor(frameCount / 30) % 2 === 0) {
+    ctx.fillStyle = '#ffffff';
+    ctx.font = '14px "Courier New", monospace';
+    ctx.fillText('按 空格键 或 回车键 重新开始', W / 2, 340);
+  }
+}
+
+// ==================== 主循环 ====================
+function gameLoop() {
+  frameCount++;
+
+  // 屏幕震动
+  ctx.save();
+  if (screenShake > 0) {
+    ctx.translate(
+      (Math.random() - 0.5) * screenShake * 2,
+      (Math.random() - 0.5) * screenShake * 2
+    );
+    screenShake--;
+  }
+
+  if (gameState === 'start') {
+    drawStartScreen();
+  } else if (gameState === 'playing') {
+    // 更新
+    p1.update();
+    p2.update();
+    checkAttacks();
+    checkGameOver();
+
+    // 更新粒子
+    particles = particles.filter(p => { p.update(); return p.life > 0; });
+
+    // 绘制
+    drawBackground();
+    p1.draw();
+    p2.draw();
+    particles.forEach(p => p.draw());
+    drawHUD(p1, p2);
+  } else if (gameState === 'gameover') {
+    // 继续绘制场景
+    drawBackground();
+    p1.draw();
+    p2.draw();
+    particles.forEach(p => p.draw());
+    drawHUD(p1, p2);
+    drawGameOverScreen();
+  }
+
+  ctx.restore();
+  requestAnimationFrame(gameLoop);
+}
+
+// ==================== 启动 ====================
+resetGame();
+gameState = 'start';
+gameLoop();
+</script>
+</body>
+</html>
